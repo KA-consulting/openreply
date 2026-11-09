@@ -72,6 +72,26 @@ describe("tracked link messages", () => {
     ).toBe("Link: https://manychat-alternative.com/r/abc123");
   });
 
+  it("strips the {link} token when the campaign has no tracked link", () => {
+    expect(
+      renderMessageWithTracking({
+        message: "Hey {username}, thanks for your comment! {link}",
+        commenterName: "Maya",
+        trackedLinks: [],
+      })
+    ).toBe("Hey Maya, thanks for your comment!");
+  });
+
+  it("leaves a link-free message untouched when there is no tracked link", () => {
+    expect(
+      renderMessageWithTracking({
+        message: "  Hey {username}, thanks for your comment!  ",
+        commenterName: "Maya",
+        trackedLinks: [],
+      })
+    ).toBe("  Hey Maya, thanks for your comment!  ");
+  });
+
   it("builds redirect URLs from a base URL", () => {
     expect(buildTrackedUrl("abc123", "https://manychat-alternative.com/")).toBe(
       "https://manychat-alternative.com/r/abc123"

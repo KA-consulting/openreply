@@ -391,7 +391,7 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       return setError("Pick a post or reel to trigger the campaign.");
     if (matchMode === "specific" && keywords.length === 0)
       return setError("Add at least one keyword, or switch to any word.");
-    if (!dmMessage.trim()) return setError("Add the DM with the link.");
+    if (!dmMessage.trim()) return setError("Write the DM message.");
     if (openingDmEnabled && (!openingDmMessage.trim() || !openingDmButtonLabel.trim()))
       return setError("Your opening DM needs a message and a button label.");
 
@@ -866,7 +866,9 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
 
         <Section title="And then, they will get">
           <div className="rounded-lg border border-border p-3 space-y-2">
-            <span className="text-sm text-foreground">a DM with a link</span>
+            <span className="text-sm text-foreground">
+              a DM, a link is optional
+            </span>
             <textarea
               value={dmMessage}
               onChange={(e) => setDmMessage(e.target.value)}

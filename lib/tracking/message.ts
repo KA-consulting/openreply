@@ -75,7 +75,14 @@ export function renderMessageWithTracking({
   let rendered = message.replace(/\{username\}/gi, commenterName ?? "there");
   const primaryLink = trackedLinks?.[0];
 
-  if (!primaryLink) return rendered;
+  // No link on this campaign: drop the {link} token instead of sending it
+  // literally. The builder inserts the token as soon as the link field is
+  // touched, so a campaign whose link was later cleared still carries it.
+  if (!primaryLink) {
+    return /\{link\}/i.test(rendered)
+      ? rendered.replace(/\s*\{link\}\s*/gi, " ").trim()
+      : rendered;
+  }
 
   const trackedUrl = buildTrackedUrl(primaryLink.slug, baseUrl);
 
