@@ -51,6 +51,7 @@ interface LoadedCampaign {
   collectEmail?: boolean;
   workWithLabel?: string | null;
   workWithUrl?: string | null;
+  workWithAutomationId?: string | null;
   emailPromptMessage?: string | null;
   emailInvalidMessage?: string | null;
   publicReplyEnabled: boolean;
@@ -188,6 +189,10 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
   const [workWithEnabled, setWorkWithEnabled] = useState(false);
   const [workWithLabel, setWorkWithLabel] = useState("Travailler avec moi");
   const [workWithUrl, setWorkWithUrl] = useState("");
+  const [workWithAutomationId, setWorkWithAutomationId] = useState("");
+  const [otherCampaigns, setOtherCampaigns] = useState<
+    { id: string; name: string }[]
+  >([]);
   const [collectEmail, setCollectEmail] = useState(false);
   const [emailPromptMessage, setEmailPromptMessage] = useState("");
   const [emailInvalidMessage, setEmailInvalidMessage] = useState("");
@@ -252,6 +257,19 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
   }, []);
 
   // Prefill when editing.
+  // Campaigns a "work with me" button can route to.
+  useEffect(() => {
+    fetch("/api/automations")
+      .then((res) => res.json())
+      .then((payload) => {
+        const list = (payload.data ?? []) as { id: string; name: string }[];
+        setOtherCampaigns(
+          list.filter((c) => c.id !== campaignId).map(({ id, name }) => ({ id, name }))
+        );
+      })
+      .catch(() => setOtherCampaigns([]));
+  }, [campaignId]);
+
   useEffect(() => {
     if (mode !== "edit" || !campaignId) return;
     fetch("/api/automations", { cache: "no-store" })
@@ -299,7 +317,8 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
         setFollowUpEnabled(c.followUpEnabled ?? false);
         setFollowUpMessage(c.followUpMessage ?? "");
         setFollowUpDelayMinutes(c.followUpDelayMinutes ?? 0);
-        setWorkWithEnabled(Boolean(c.workWithUrl));
+        setWorkWithEnabled(Boolean(c.workWithUrl || c.workWithAutomationId));
+        setWorkWithAutomationId(c.workWithAutomationId ?? "");
         setWorkWithLabel(c.workWithLabel ?? "Travailler avec moi");
         setWorkWithUrl(c.workWithUrl ?? "");
         setCollectEmail(c.collectEmail ?? false);
@@ -412,8 +431,14 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
     if (openingDmEnabled && (!openingDmMessage.trim() || !openingDmButtonLabel.trim()))
       return setError("Your opening DM needs a message and a button label.");
 
-    if (workWithEnabled && !/^https?:\/\/\S+$/i.test(workWithUrl.trim()))
-      return setError("The work with me button needs a full link (https://...).");
+    if (
+      workWithEnabled &&
+      !workWithAutomationId &&
+      !/^https?:\/\/\S+$/i.test(workWithUrl.trim())
+    )
+      return setError(
+        "The work with me button needs a campaign to open, or a full link (https://...)."
+      );
 
     if (collectEmail && !openingDmEnabled && !dmTriggerEnabled)
       return setError(
@@ -453,7 +478,8 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       followUpMessage: followUpEnabled ? followUpMessage.trim() : "",
       followUpDelayMinutes: followUpEnabled ? followUpDelayMinutes : 0,
       workWithLabel: workWithEnabled ? workWithLabel.trim() || "Work with me" : null,
-      workWithUrl: workWithEnabled ? workWithUrl.trim() : "",
+      workWithUrl: workWithEnabled && !workWithAutomationId ? workWithUrl.trim() : "",
+      workWithAutomationId: workWithEnabled ? workWithAutomationId : "",
       collectEmail,
       emailPromptMessage: collectEmail ? emailPromptMessage.trim() : "",
       emailInvalidMessage: collectEmail ? emailInvalidMessage.trim() : "",
@@ -911,15 +937,30 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
                   className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none"
                   maxLength={20}
                 />
-                <input
-                  value={workWithUrl}
-                  onChange={(e) => setWorkWithUrl(e.target.value)}
-                  placeholder="https://calendly.com/..."
-                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none"
-                />
+                <select
+                  value={workWithAutomationId}
+                  onChange={(e) => setWorkWithAutomationId(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground focus:border-accent/40 focus:outline-none"
+                >
+                  <option value="">Open a link instead</option>
+                  {otherCampaigns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      Send the reply of: {c.name}
+                    </option>
+                  ))}
+                </select>
+                {!workWithAutomationId && (
+                  <input
+                    value={workWithUrl}
+                    onChange={(e) => setWorkWithUrl(e.target.value)}
+                    placeholder="https://calendly.com/..."
+                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none"
+                  />
+                )}
                 <p className="text-xs text-muted">
-                  A link button shown next to the campaign&apos;s own buttons,
-                  on the opening DM and on the link DM. Instagram allows 20
+                  A button shown next to the campaign&apos;s own buttons, on the
+                  opening DM and on the link DM. Tapping it sends the chosen
+                  campaign&apos;s reply, or opens the link. Instagram allows 20
                   characters for the label.
                 </p>
               </div>

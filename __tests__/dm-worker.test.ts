@@ -1480,3 +1480,98 @@ describe("DM Worker, work with me button", () => {
     expect(mockSendDirectMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("DM Worker, work with me button routed to another campaign", () => {
+  const routed = {
+    workWithLabel: "Travailler avec moi",
+    workWithAutomationId: "auto_start",
+    // A leftover URL must lose against the target campaign.
+    workWithUrl: "https://calendly.com/example/old",
+  };
+  const expectedButton = {
+    title: "Travailler avec moi",
+    payload: "reveal:auto_start",
+  };
+
+  it("sends a postback button that starts the other campaign's reply", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...mockAutomation,
+        ...routed,
+        openingDmEnabled: true,
+        openingDmMessage: "Tu veux la vidéo ?",
+        openingDmButtonLabel: "Oui, envoie-la",
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob());
+
+    expect(mockSendPrivateReplyWithButton).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "comment_555",
+      expect.any(String),
+      "Oui, envoie-la",
+      "reveal:auto_789",
+      [expectedButton]
+    );
+  });
+
+  it("puts the same postback button on the link DM", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue({
+      ...mockAutomation,
+      ...routed,
+      trackedLinks: [
+        { slug: "s1", label: "Voir la vidéo", destinationUrl: "https://example.com/1" },
+      ],
+    });
+
+    const processor = getProcessor();
+    await processor({
+      name: "process-postback",
+      data: {
+        instagramAccountId: "ig_456",
+        userId: "commenter_999",
+        payload: "reveal:auto_789",
+      },
+      id: "postback_job_routed",
+      attemptsMade: 0,
+    });
+
+    const buttons = mockSendDirectMessageWithLinkButton.mock.calls[0][4];
+    expect(buttons[buttons.length - 1]).toEqual(expectedButton);
+  });
+
+  it("delivers the target campaign's reply when the button is tapped", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue({
+      ...mockAutomation,
+      id: "auto_start",
+      dmMessage: "Bonjour. Dis-moi, tu es dans quel domaine ?",
+    });
+
+    const processor = getProcessor();
+    await processor({
+      name: "process-postback",
+      data: {
+        instagramAccountId: "ig_456",
+        userId: "commenter_999",
+        payload: "reveal:auto_start",
+      },
+      id: "postback_job_start",
+      attemptsMade: 0,
+    });
+
+    expect(mockPrisma.automation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "auto_start", isActive: true },
+      })
+    );
+    expect(mockSendDirectMessage).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "commenter_999",
+      "Bonjour. Dis-moi, tu es dans quel domaine ?"
+    );
+  });
+});

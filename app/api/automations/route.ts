@@ -48,6 +48,7 @@ const createAutomationSchema = z
       .union([z.string().url(), z.literal("")])
       .optional()
       .nullable(),
+    workWithAutomationId: z.string().max(64).optional().nullable(),
     publicReplyEnabled: z.boolean().optional().default(false),
     publicReplyMessage: z.string().max(1000).optional().nullable(),
     publicReplyMessages: z
@@ -126,6 +127,7 @@ const updateAutomationSchema = z.object({
     .union([z.string().url(), z.literal("")])
     .optional()
     .nullable(),
+  workWithAutomationId: z.string().max(64).optional().nullable(),
   publicReplyEnabled: z.boolean().optional(),
   publicReplyMessage: z.string().max(1000).optional().nullable(),
   publicReplyMessages: z.array(z.string().max(1000)).max(10).optional(),
@@ -366,6 +368,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (parsed.data.workWithAutomationId) {
+    const target = await prisma.automation.findFirst({
+      where: { id: parsed.data.workWithAutomationId, workspaceId },
+      select: { id: true },
+    });
+    if (!target) {
+      return NextResponse.json(
+        { success: false, error: "The work with me campaign was not found" },
+        { status: 400 }
+      );
+    }
+  }
+
   const { trackedDestinationUrl, secondaryDestinationUrl, secondaryButtonLabel } =
     parsed.data;
 
@@ -444,9 +459,11 @@ export async function POST(request: NextRequest) {
         ? parsed.data.followUpDelayMinutes
         : 0,
       workWithUrl: parsed.data.workWithUrl || null,
-      workWithLabel: parsed.data.workWithUrl
-        ? parsed.data.workWithLabel?.trim() || null
-        : null,
+      workWithAutomationId: parsed.data.workWithAutomationId || null,
+      workWithLabel:
+        parsed.data.workWithUrl || parsed.data.workWithAutomationId
+          ? parsed.data.workWithLabel?.trim() || null
+          : null,
       collectEmail: parsed.data.collectEmail,
       emailPromptMessage: parsed.data.collectEmail
         ? parsed.data.emailPromptMessage?.trim() || null
@@ -554,9 +571,36 @@ export async function PATCH(request: NextRequest) {
     automationData.followUpMessage = null;
     automationData.followUpDelayMinutes = 0;
   }
-  // An empty URL removes the button, label included.
-  if (automationData.workWithUrl === "") {
-    automationData.workWithUrl = null;
+  // An empty URL or target removes that half of the button; the label goes
+  // with it once neither half is left.
+  if (automationData.workWithUrl === "") automationData.workWithUrl = null;
+  if (automationData.workWithAutomationId === "") {
+    automationData.workWithAutomationId = null;
+  }
+  if (automationData.workWithAutomationId) {
+    // The target must be another campaign of this workspace, otherwise the
+    // button would route to nothing (or to someone else's conversation).
+    const target = await prisma.automation.findFirst({
+      where: {
+        id: automationData.workWithAutomationId,
+        workspaceId,
+        NOT: { id: automationId },
+      },
+      select: { id: true },
+    });
+    if (!target) {
+      return NextResponse.json(
+        { success: false, error: "The work with me campaign was not found" },
+        { status: 400 }
+      );
+    }
+  }
+  if (
+    (automationData.workWithUrl === null ||
+      automationData.workWithAutomationId === null) &&
+    !(automationData.workWithUrl ?? existing.workWithUrl) &&
+    !(automationData.workWithAutomationId ?? existing.workWithAutomationId)
+  ) {
     automationData.workWithLabel = null;
   }
   if (automationData.collectEmail === false) {

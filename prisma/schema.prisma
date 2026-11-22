@@ -207,6 +207,9 @@ model Automation {
   // own buttons: on the opening DM, the reveal DM and link-free DMs alike.
   workWithLabel        String?
   workWithUrl          String?
+  // When set, the button is a postback that sends the reply of this other
+  // campaign (a conversation starter) instead of opening workWithUrl.
+  workWithAutomationId String?
   publicReplyEnabled Boolean @default(false)
   publicReplyMessage String?
   publicReplyMessages String[] @default([])

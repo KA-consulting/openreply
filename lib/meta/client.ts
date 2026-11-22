@@ -292,13 +292,18 @@ export async function getUserFollowStatus(
  */
 export interface LinkButton {
   title: string;
-  url: string;
+  // A button is either a link (url) or a postback (payload) that routes back to
+  // our webhook when tapped, e.g. to start another campaign's conversation.
+  url?: string;
+  payload?: string;
 }
 
 function toWebUrlButtons(buttons: LinkButton[]) {
-  return buttons
-    .slice(0, 3)
-    .map((b) => ({ type: "web_url", url: b.url, title: b.title.slice(0, 20) }));
+  return buttons.slice(0, 3).map((b) =>
+    b.payload
+      ? { type: "postback", payload: b.payload, title: b.title.slice(0, 20) }
+      : { type: "web_url", url: b.url, title: b.title.slice(0, 20) }
+  );
 }
 
 /**

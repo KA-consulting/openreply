@@ -15,6 +15,7 @@ import { prisma } from "@/lib/db/client";
 import {
   MetaApiError,
   RateLimitError,
+  type LinkButton,
   TokenExpiredError,
   getUserFollowStatus,
   sendCommentReply,
@@ -90,7 +91,7 @@ type WorkerTrackedLink = {
 function buildLinkButtons(
   trackedLinks: WorkerTrackedLink[],
   primaryLabel: string | null
-): { title: string; url: string }[] {
+): LinkButton[] {
   return trackedLinks.slice(0, 3).map((link, index) => ({
     url: buildTrackedUrl(link.slug),
     title: (index === 0 ? primaryLabel : link.label) || link.label || "Open link",
@@ -100,18 +101,20 @@ function buildLinkButtons(
 type WorkWithFields = {
   workWithLabel?: string | null;
   workWithUrl?: string | null;
+  workWithAutomationId?: string | null;
 };
 
 /**
- * The campaign's optional "work with me" button. Both fields must be set; the
- * label falls back to a generic one so a URL alone still produces a button.
+ * The campaign's optional "work with me" button. With a target campaign it is a
+ * postback that sends that campaign's reply when tapped (a conversation
+ * starter); otherwise it opens the URL. The label falls back to a generic one.
  */
-function getWorkWithButton(
-  automation: WorkWithFields
-): { title: string; url: string } | null {
+function getWorkWithButton(automation: WorkWithFields): LinkButton | null {
+  const title = automation.workWithLabel?.trim() || "Work with me";
+  const targetId = automation.workWithAutomationId?.trim();
+  if (targetId) return { title, payload: `reveal:${targetId}` };
   const url = automation.workWithUrl?.trim();
-  if (!url) return null;
-  return { title: automation.workWithLabel?.trim() || "Work with me", url };
+  return url ? { title, url } : null;
 }
 
 /**
@@ -122,8 +125,8 @@ function getWorkWithButton(
 function buildAllLinkButtons(
   trackedLinks: WorkerTrackedLink[],
   primaryLabel: string | null,
-  workWith: { title: string; url: string } | null
-): { title: string; url: string }[] {
+  workWith: LinkButton | null
+): LinkButton[] {
   const links = buildLinkButtons(trackedLinks, primaryLabel).slice(
     0,
     workWith ? 2 : 3
@@ -224,7 +227,7 @@ async function sendRevealDirectMessage(
         accessToken,
         automation.instagramAccount.instagramId,
         userId,
-        workWith ? `${inline}\n${workWith.url}` : inline
+        workWith?.url ? `${inline}\n${workWith.url}` : inline
       );
     } catch {
       throw buttonError;
@@ -662,7 +665,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
             ? `followcheck:${automation.id}`
             : `reveal:${automation.id}`,
           ...(getWorkWithButton(automation)
-            ? [[getWorkWithButton(automation) as { title: string; url: string }]]
+            ? [[getWorkWithButton(automation) as LinkButton]]
             : [])
         );
       } else if (sendFollowPrompt) {
@@ -721,7 +724,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
             automation.trackedLinks,
             bodyText
           );
-          const fallbackMessage = workWith
+          const fallbackMessage = workWith?.url
             ? `${inlineFallback}\n${workWith.url}`
             : inlineFallback;
           try {
