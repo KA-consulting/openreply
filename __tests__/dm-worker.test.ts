@@ -31,6 +31,12 @@ const {
     instagramAccount: {
       findUnique: vi.fn(),
     },
+    emailCapture: {
+      findFirst: vi.fn(),
+      findUnique: vi.fn(),
+      upsert: vi.fn(),
+      update: vi.fn(),
+    },
     operationalEvent: {
       create: vi.fn(),
     },
@@ -229,6 +235,10 @@ beforeEach(() => {
     workspaceId: "workspace_123",
   });
   mockPrisma.operationalEvent.create.mockResolvedValue({});
+  mockPrisma.emailCapture.findFirst.mockResolvedValue(null);
+  mockPrisma.emailCapture.findUnique.mockResolvedValue(null);
+  mockPrisma.emailCapture.upsert.mockResolvedValue({});
+  mockPrisma.emailCapture.update.mockResolvedValue({});
   mockDecryptToken.mockReturnValue("decrypted_token");
   mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
   mockReserveWorkspaceDMSend.mockResolvedValue({
@@ -1114,5 +1124,199 @@ describe("DM Worker — DM keyword trigger", () => {
         create: expect.objectContaining({ status: "FAILED" }),
       })
     );
+  });
+});
+
+describe("DM Worker, email gate", () => {
+  const gatedAutomation = {
+    ...mockAutomation,
+    collectEmail: true,
+    emailPromptMessage: "Quel est ton meilleur email ?",
+    emailInvalidMessage: "Ce n'est pas un email, renvoie-le.",
+    requireFollow: false,
+    dmTriggerEnabled: false,
+    trackedLinks: [
+      {
+        slug: "abc123",
+        label: "Voir la vidéo",
+        destinationUrl: "https://youtu.be/example",
+      },
+    ],
+    linkButtonLabel: "Voir la vidéo",
+  };
+
+  const pendingCapture = {
+    id: "capture_1",
+    username: "commenter_user",
+    automation: gatedAutomation,
+  };
+
+  function postbackJob(extra: Record<string, unknown> = {}) {
+    return createMockPostbackJob({
+      instagramAccountId: "ig_456",
+      userId: "commenter_999",
+      payload: "reveal:auto_789",
+      ...extra,
+    });
+  }
+
+  function messageJob(messageText: string) {
+    return {
+      name: "process-message",
+      data: {
+        instagramAccountId: "ig_456",
+        messageId: "mid_email",
+        messageText,
+        senderId: "commenter_999",
+      },
+      id: "message_job_email",
+      attemptsMade: 0,
+    };
+  }
+
+  beforeEach(() => {
+    mockPrisma.automation.findFirst.mockResolvedValue(gatedAutomation);
+    mockPrisma.automation.findMany.mockResolvedValue([]);
+  });
+
+  it("asks for the email after the button tap and holds the link back", async () => {
+    const processor = getProcessor();
+    await processor(postbackJob());
+
+    expect(mockPrisma.emailCapture.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          automationId: "auto_789",
+          userId: "commenter_999",
+          status: "AWAITING",
+        }),
+      })
+    );
+    expect(mockSendDirectMessage).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "commenter_999",
+      "Quel est ton meilleur email ?"
+    );
+    expect(mockSendDirectMessageWithLinkButton).not.toHaveBeenCalled();
+    expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
+  });
+
+  it("releases the link on a tap from someone who already gave their email", async () => {
+    mockPrisma.emailCapture.findUnique.mockResolvedValue({ status: "CAPTURED" });
+
+    const processor = getProcessor();
+    await processor(postbackJob());
+
+    expect(mockSendDirectMessageWithLinkButton).toHaveBeenCalled();
+    expect(mockPrisma.emailCapture.upsert).not.toHaveBeenCalled();
+  });
+
+  it("never asks on the read fallback, where the messaging window is closed", async () => {
+    const processor = getProcessor();
+    await processor(postbackJob({ fallback: true }));
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockSendDirectMessageWithLinkButton).not.toHaveBeenCalled();
+    expect(mockPrisma.emailCapture.upsert).not.toHaveBeenCalled();
+  });
+
+  it("stores a valid email, sends the link and marks the person captured", async () => {
+    mockPrisma.emailCapture.findFirst.mockResolvedValue(pendingCapture);
+
+    const processor = getProcessor();
+    await processor(messageJob("Mon mail : Kassim@Example.com merci"));
+
+    expect(mockPrisma.emailCapture.update).toHaveBeenCalledWith({
+      where: { id: "capture_1" },
+      data: { email: "kassim@example.com" },
+    });
+    expect(mockSendDirectMessageWithLinkButton).toHaveBeenCalled();
+    expect(mockPrisma.emailCapture.update).toHaveBeenCalledWith({
+      where: { id: "capture_1" },
+      data: { status: "CAPTURED", capturedAt: expect.any(Date) },
+    });
+    // The email answer is not also run through keyword matching.
+    expect(mockPrisma.automation.findMany).not.toHaveBeenCalled();
+  });
+
+  it("keeps the person waiting when the link send fails, so a retry still works", async () => {
+    mockPrisma.emailCapture.findFirst.mockResolvedValue(pendingCapture);
+    mockSendDirectMessageWithLinkButton.mockRejectedValue(
+      new Error("Meta is down")
+    );
+    mockSendDirectMessage.mockRejectedValue(new Error("Meta is down"));
+
+    const processor = getProcessor();
+    await expect(processor(messageJob("kassim@example.com"))).rejects.toThrow(
+      "Meta is down"
+    );
+
+    expect(mockPrisma.emailCapture.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "CAPTURED" }),
+      })
+    );
+  });
+
+  it("asks again when the reply is not an email and matches nothing else", async () => {
+    mockPrisma.emailCapture.findFirst.mockResolvedValue(pendingCapture);
+    mockMatchKeywords.mockReturnValue({ matched: false, matchedKeyword: null });
+
+    const processor = getProcessor();
+    await processor(messageJob("je n'ai pas d'email"));
+
+    expect(mockSendDirectMessage).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "commenter_999",
+      "Ce n'est pas un email, renvoie-le."
+    );
+    expect(mockSendDirectMessageWithLinkButton).not.toHaveBeenCalled();
+  });
+
+  it("does not scold someone who asked for another campaign mid-flow", async () => {
+    mockPrisma.emailCapture.findFirst.mockResolvedValue(pendingCapture);
+    mockPrisma.automation.findMany.mockResolvedValue([
+      { ...mockAutomation, dmTriggerEnabled: true, requireFollow: false },
+    ]);
+
+    const processor = getProcessor();
+    await processor(messageJob("académie"));
+
+    expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendDirectMessage).not.toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "commenter_999",
+      "Ce n'est pas un email, renvoie-le."
+    );
+  });
+
+  it("stays silent on an ordinary DM when nobody is waiting on an email", async () => {
+    mockMatchKeywords.mockReturnValue({ matched: false, matchedKeyword: null });
+
+    const processor = getProcessor();
+    await processor(messageJob("salut"));
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+  });
+
+  it("asks for the email instead of revealing on a DM keyword trigger", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      { ...gatedAutomation, dmTriggerEnabled: true },
+    ]);
+
+    const processor = getProcessor();
+    await processor(messageJob("académie"));
+
+    expect(mockPrisma.emailCapture.upsert).toHaveBeenCalled();
+    expect(mockSendDirectMessage).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "commenter_999",
+      "Quel est ton meilleur email ?"
+    );
+    expect(mockSendDirectMessageWithLinkButton).not.toHaveBeenCalled();
   });
 });

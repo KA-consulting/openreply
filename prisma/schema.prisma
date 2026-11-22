@@ -80,6 +80,7 @@ model Workspace {
   instagramAccounts InstagramAccount[]
   automations       Automation[]
   dmLogs            DmLog[]
+  emailCaptures     EmailCapture[]
   trackedLinks      TrackedLink[]
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
@@ -139,6 +140,7 @@ model InstagramAccount {
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   automations Automation[]
   dmLogs      DmLog[]
+  emailCaptures EmailCapture[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
 
@@ -195,6 +197,12 @@ model Automation {
   // Minutes to wait after the link is delivered before sending the follow-up.
   // 0 sends it right away.
   followUpDelayMinutes Int @default(0)
+  // Collect the user's email address before the link is revealed. After the
+  // opening DM button is tapped, the account asks for an email and holds the
+  // link back until a valid address is sent as a reply (see EmailCapture).
+  collectEmail         Boolean @default(false)
+  emailPromptMessage   String?
+  emailInvalidMessage  String?
   publicReplyEnabled Boolean @default(false)
   publicReplyMessage String?
   publicReplyMessages String[] @default([])
@@ -209,6 +217,7 @@ model Automation {
   workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
   dmLogs           DmLog[]
+  emailCaptures    EmailCapture[]
   trackedLinks     TrackedLink[]
   linkClicks       LinkClick[]
 
@@ -259,6 +268,38 @@ model DmLog {
 // distinct from DmLog (which only records comments that matched a campaign);
 // this records all comments so the reconciler doesn't re-sweep non-matching
 // ones every cycle.
+// One row per (campaign, person) in an email-gated campaign. AWAITING means we
+// asked for an address and the link is held back; CAPTURED means a valid
+// address arrived and the link was released. The sender's IGSID is the same id
+// the comment and postback webhooks use, so the three paths line up.
+model EmailCapture {
+  id                 String             @id @default(cuid())
+  workspaceId        String
+  automationId       String
+  instagramAccountId String
+  userId             String
+  username           String?
+  email              String?
+  status             EmailCaptureStatus @default(AWAITING)
+  promptedAt         DateTime           @default(now())
+  capturedAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  automation       Automation       @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, userId])
+  @@index([workspaceId])
+  @@index([instagramAccountId, userId, status])
+}
+
+enum EmailCaptureStatus {
+  AWAITING
+  CAPTURED
+}
+
 model ProcessedComment {
   id                 String   @id @default(cuid())
   instagramAccountId String

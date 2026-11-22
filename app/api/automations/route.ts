@@ -40,6 +40,9 @@ const createAutomationSchema = z
     // Minutes to wait before the follow-up. Capped at 24h so it stays inside
     // Instagram's messaging window.
     followUpDelayMinutes: z.number().int().min(0).max(1440).optional().default(0),
+    collectEmail: z.boolean().optional().default(false),
+    emailPromptMessage: z.string().max(1000).optional().nullable(),
+    emailInvalidMessage: z.string().max(1000).optional().nullable(),
     publicReplyEnabled: z.boolean().optional().default(false),
     publicReplyMessage: z.string().max(1000).optional().nullable(),
     publicReplyMessages: z
@@ -71,6 +74,15 @@ const createAutomationSchema = z
     message: "Add at least one keyword, or match any word",
     path: ["keywords"],
   })
+  // The email gate needs a conversation to ask in: it starts from a button tap
+  // on the opening DM, or from a DM the user sent first.
+  .refine(
+    (d) => !d.collectEmail || d.openingDmEnabled || d.dmTriggerEnabled,
+    {
+      message: "Collecting an email needs an opening DM or a DM trigger",
+      path: ["collectEmail"],
+    }
+  )
   // An opening DM needs both a message and a button label.
   .refine(
     (d) =>
@@ -101,6 +113,9 @@ const updateAutomationSchema = z.object({
   followUpEnabled: z.boolean().optional(),
   followUpMessage: z.string().max(1000).optional().nullable(),
   followUpDelayMinutes: z.number().int().min(0).max(1440).optional(),
+  collectEmail: z.boolean().optional(),
+  emailPromptMessage: z.string().max(1000).optional().nullable(),
+  emailInvalidMessage: z.string().max(1000).optional().nullable(),
   publicReplyEnabled: z.boolean().optional(),
   publicReplyMessage: z.string().max(1000).optional().nullable(),
   publicReplyMessages: z.array(z.string().max(1000)).max(10).optional(),
@@ -418,6 +433,13 @@ export async function POST(request: NextRequest) {
       followUpDelayMinutes: parsed.data.followUpEnabled
         ? parsed.data.followUpDelayMinutes
         : 0,
+      collectEmail: parsed.data.collectEmail,
+      emailPromptMessage: parsed.data.collectEmail
+        ? parsed.data.emailPromptMessage?.trim() || null
+        : null,
+      emailInvalidMessage: parsed.data.collectEmail
+        ? parsed.data.emailInvalidMessage?.trim() || null
+        : null,
       publicReplyEnabled: parsed.data.publicReplyEnabled,
       publicReplyMessages: parsed.data.publicReplyEnabled
         ? publicReplyList
@@ -517,6 +539,26 @@ export async function PATCH(request: NextRequest) {
   if (automationData.followUpEnabled === false) {
     automationData.followUpMessage = null;
     automationData.followUpDelayMinutes = 0;
+  }
+  if (automationData.collectEmail === false) {
+    automationData.emailPromptMessage = null;
+    automationData.emailInvalidMessage = null;
+  }
+  // The email gate cannot run without a conversation to ask in; check the
+  // merged state so turning off the opening DM on a gated campaign is caught.
+  const mergedCollectEmail = automationData.collectEmail ?? existing.collectEmail;
+  const mergedOpeningDm =
+    automationData.openingDmEnabled ?? existing.openingDmEnabled;
+  const mergedDmTrigger =
+    automationData.dmTriggerEnabled ?? existing.dmTriggerEnabled;
+  if (mergedCollectEmail && !mergedOpeningDm && !mergedDmTrigger) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Collecting an email needs an opening DM or a DM trigger",
+      },
+      { status: 400 }
+    );
   }
   // Any-post / next-reel campaigns carry no specific post.
   if (automationData.matchAnyPost === true || automationData.pendingNextReel === true) {

@@ -34,6 +34,12 @@ import {
 } from "@/lib/billing/usage";
 import { recordWorkerAlert } from "@/lib/ops/worker-health";
 import {
+  DEFAULT_EMAIL_INVALID_MESSAGE,
+  DEFAULT_EMAIL_PROMPT,
+  extractEmail,
+  notifyEmailCaptured,
+} from "@/lib/email-capture";
+import {
   buildTrackedUrl,
   renderMessageWithTracking,
   renderMessageWithoutLink,
@@ -186,6 +192,59 @@ async function sendRevealDirectMessage(
       throw buttonError;
     }
   }
+}
+
+/**
+ * Email gate, step 1: ask the user for their address and hold the link back.
+ * Records the person as AWAITING so the next DM they send is read as the answer
+ * (see handleEmailReply). Safe to call again on a repeat tap: it re-asks, and
+ * never downgrades someone who already gave their email.
+ */
+async function requestEmail(
+  accessToken: string,
+  automation: {
+    id: string;
+    workspaceId: string;
+    instagramAccountId: string;
+    emailPromptMessage: string | null;
+    instagramAccount: { instagramId: string };
+  },
+  userId: string,
+  commenterName: string | null
+): Promise<void> {
+  await prisma.emailCapture.upsert({
+    where: { automationId_userId: { automationId: automation.id, userId } },
+    create: {
+      workspaceId: automation.workspaceId,
+      automationId: automation.id,
+      instagramAccountId: automation.instagramAccountId,
+      userId,
+      username: commenterName,
+      status: "AWAITING",
+    },
+    update: { promptedAt: new Date() },
+  });
+
+  await sendDirectMessage(
+    accessToken,
+    automation.instagramAccount.instagramId,
+    userId,
+    renderMessageWithoutLink({
+      message: automation.emailPromptMessage || DEFAULT_EMAIL_PROMPT,
+      commenterName,
+    })
+  );
+}
+
+async function hasCapturedEmail(
+  automationId: string,
+  userId: string
+): Promise<boolean> {
+  const capture = await prisma.emailCapture.findUnique({
+    where: { automationId_userId: { automationId, userId } },
+    select: { status: true },
+  });
+  return capture?.status === "CAPTURED";
 }
 
 async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
@@ -780,6 +839,18 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     }
   }
 
+  // Email gate: once the follow check (if any) has passed, the link is held
+  // back until the user has sent an email address. The read fallback never
+  // asks: it only runs when the user did not tap, so the messaging window is
+  // closed and there is nobody to ask.
+  if (automation.collectEmail) {
+    if (fallback) return;
+    if (!(await hasCapturedEmail(automation.id, userId))) {
+      await requestEmail(accessToken, automation, userId, commenterName);
+      return;
+    }
+  }
+
   const usage = await reserveWorkspaceDMSend(automation.workspaceId);
   if (!usage.allowed) {
     await prisma.dmLog.upsert({
@@ -935,6 +1006,185 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
   }
 }
 
+type EmailReplyOutcome =
+  | { state: "none" }
+  | {
+      state: "awaiting";
+      automation: {
+        emailInvalidMessage: string | null;
+        instagramAccount: { instagramId: string; accessToken: string | null };
+      };
+      commenterName: string | null;
+    }
+  | { state: "captured" };
+
+/**
+ * Email gate, step 2: read an inbound DM as the answer to our email question.
+ *
+ * - No pending question for this sender: "none", the DM goes down the normal
+ *   keyword path.
+ * - Pending question and the DM holds a valid address: store it, release the
+ *   link, mark CAPTURED. The address is saved before the send, so a failed send
+ *   retries with the email already on file; CAPTURED is only set once the link
+ *   is out, so a retry still finds the pending row.
+ * - Pending question but no address: "awaiting", and the caller re-asks unless
+ *   the DM matched another campaign's keyword (someone can ask for something
+ *   else mid-flow without being told their message is not an email).
+ */
+async function handleEmailReply(
+  job: Job<ProcessMessageJob>
+): Promise<EmailReplyOutcome> {
+  const { instagramAccountId, messageText, senderId } = job.data;
+
+  const pending = await prisma.emailCapture.findFirst({
+    where: {
+      userId: senderId,
+      status: "AWAITING",
+      instagramAccount: { instagramId: instagramAccountId },
+      automation: { isActive: true, collectEmail: true },
+    },
+    orderBy: { promptedAt: "desc" },
+    include: {
+      automation: {
+        include: {
+          instagramAccount: true,
+          workspace: true,
+          trackedLinks: {
+            select: { slug: true, label: true, destinationUrl: true },
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      },
+    },
+  });
+
+  if (!pending) return { state: "none" };
+
+  const automation = pending.automation;
+  const commenterName = pending.username;
+  const email = extractEmail(messageText);
+
+  if (!email) {
+    return { state: "awaiting", automation, commenterName };
+  }
+
+  if (!automation.instagramAccount.accessToken) return { state: "none" };
+  let accessToken: string;
+  try {
+    accessToken = decryptToken(automation.instagramAccount.accessToken);
+  } catch {
+    return { state: "none" };
+  }
+
+  await prisma.emailCapture.update({
+    where: { id: pending.id },
+    data: { email },
+  });
+
+  const dedupeId = `reveal:${senderId}`;
+  const usage = await reserveWorkspaceDMSend(automation.workspaceId);
+  if (!usage.allowed) {
+    await prisma.dmLog.upsert({
+      where: {
+        automationId_commentId: { automationId: automation.id, commentId: dedupeId },
+      },
+      create: {
+        workspaceId: automation.workspaceId,
+        automationId: automation.id,
+        instagramAccountId: automation.instagramAccountId,
+        commenterId: senderId,
+        commenterName,
+        commentText: "(email reply)",
+        commentId: dedupeId,
+        status: "SKIPPED_PLAN_LIMIT",
+        errorMessage: `Monthly DM limit reached (${usage.limit})`,
+      },
+      update: { status: "SKIPPED_PLAN_LIMIT" },
+    });
+    return { state: "captured" };
+  }
+
+  try {
+    await sendRevealDirectMessage(
+      accessToken,
+      automation,
+      senderId,
+      commenterName,
+      "email capture"
+    );
+  } catch (error) {
+    await releaseWorkspaceDMReservation(automation.workspaceId, usage.periodStart);
+    await prisma.dmLog.upsert({
+      where: {
+        automationId_commentId: { automationId: automation.id, commentId: dedupeId },
+      },
+      create: {
+        workspaceId: automation.workspaceId,
+        automationId: automation.id,
+        instagramAccountId: automation.instagramAccountId,
+        commenterId: senderId,
+        commenterName,
+        commentText: "(email reply)",
+        commentId: dedupeId,
+        status: "FAILED",
+        errorMessage: formatError(error),
+      },
+      update: { status: "FAILED", errorMessage: formatError(error) },
+    });
+    throw error;
+  }
+
+  const capturedAt = new Date();
+  await prisma.emailCapture.update({
+    where: { id: pending.id },
+    data: { status: "CAPTURED", capturedAt },
+  });
+  await prisma.dmLog.upsert({
+    where: {
+      automationId_commentId: { automationId: automation.id, commentId: dedupeId },
+    },
+    create: {
+      workspaceId: automation.workspaceId,
+      automationId: automation.id,
+      instagramAccountId: automation.instagramAccountId,
+      commenterId: senderId,
+      commenterName,
+      commentText: "(email reply)",
+      commentId: dedupeId,
+      status: "SENT",
+      dmSentAt: capturedAt,
+    },
+    update: { status: "SENT", dmSentAt: capturedAt, errorMessage: null },
+  });
+
+  if (automation.followUpEnabled && automation.followUpMessage?.trim()) {
+    await getDMQueue().add(
+      FOLLOWUP_JOB_NAME,
+      {
+        instagramAccountId: automation.instagramAccount.instagramId,
+        userId: senderId,
+        automationId: automation.id,
+        commenterName,
+      },
+      {
+        delay: Math.max(0, automation.followUpDelayMinutes ?? 0) * 60_000,
+        jobId: `followup_${automation.id}_${senderId}`,
+      }
+    );
+  }
+
+  await notifyEmailCaptured({
+    email,
+    username: commenterName,
+    instagramUserId: senderId,
+    campaignId: automation.id,
+    campaignName: automation.name,
+    capturedAt: capturedAt.toISOString(),
+  });
+
+  return { state: "captured" };
+}
+
 /**
  * Reply to an inbound DM whose text matches a campaign's keywords.
  *
@@ -945,6 +1195,12 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
  */
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   const { instagramAccountId, messageId, messageText, senderId } = job.data;
+
+  // A DM that answers our email question is never also a keyword trigger.
+  const emailReply = await handleEmailReply(job);
+  if (emailReply.state === "captured") return;
+
+  let matchedAnyCampaign = false;
 
   const automations = await prisma.automation.findMany({
     where: {
@@ -975,6 +1231,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         );
 
     if (!matchResult.matched) continue;
+    matchedAnyCampaign = true;
 
     const existingLog = await prisma.dmLog.findUnique({
       where: {
@@ -1108,6 +1365,13 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
           automation.followPromptButtonLabel || "I'm following ✅",
           `followcheck:${automation.id}`
         );
+      } else if (
+        automation.collectEmail &&
+        !(await hasCapturedEmail(automation.id, senderId))
+      ) {
+        // Email gate: the user messaged first, so ask for the address here
+        // instead of handing the link over.
+        await requestEmail(accessToken, automation, senderId, commenterName);
       } else {
         await sendRevealDirectMessage(
           accessToken,
@@ -1182,6 +1446,33 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         },
       });
       throw error;
+    }
+  }
+
+  // Waiting on an email, got something that is not one, and it triggered
+  // nothing else: say so instead of leaving the person talking to silence.
+  if (
+    emailReply.state === "awaiting" &&
+    !matchedAnyCampaign &&
+    emailReply.automation.instagramAccount.accessToken
+  ) {
+    try {
+      await sendDirectMessage(
+        decryptToken(emailReply.automation.instagramAccount.accessToken),
+        emailReply.automation.instagramAccount.instagramId,
+        senderId,
+        renderMessageWithoutLink({
+          message:
+            emailReply.automation.emailInvalidMessage ||
+            DEFAULT_EMAIL_INVALID_MESSAGE,
+          commenterName: emailReply.commenterName,
+        })
+      );
+    } catch (error) {
+      console.log(
+        "[DM Worker] Failed to re-ask for an email:",
+        formatError(error)
+      );
     }
   }
 }

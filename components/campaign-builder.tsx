@@ -48,6 +48,9 @@ interface LoadedCampaign {
   followUpEnabled: boolean;
   followUpMessage: string | null;
   followUpDelayMinutes: number | null;
+  collectEmail?: boolean;
+  emailPromptMessage?: string | null;
+  emailInvalidMessage?: string | null;
   publicReplyEnabled: boolean;
   publicReplyMessage: string | null;
   publicReplyMessages: string[];
@@ -180,6 +183,9 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
   const [followUpEnabled, setFollowUpEnabled] = useState(false);
   const [followUpMessage, setFollowUpMessage] = useState("");
   const [followUpDelayMinutes, setFollowUpDelayMinutes] = useState(0);
+  const [collectEmail, setCollectEmail] = useState(false);
+  const [emailPromptMessage, setEmailPromptMessage] = useState("");
+  const [emailInvalidMessage, setEmailInvalidMessage] = useState("");
 
   const [previewTab, setPreviewTab] = useState<PreviewTab>("dm");
 
@@ -288,6 +294,9 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
         setFollowUpEnabled(c.followUpEnabled ?? false);
         setFollowUpMessage(c.followUpMessage ?? "");
         setFollowUpDelayMinutes(c.followUpDelayMinutes ?? 0);
+        setCollectEmail(c.collectEmail ?? false);
+        setEmailPromptMessage(c.emailPromptMessage ?? "");
+        setEmailInvalidMessage(c.emailInvalidMessage ?? "");
       })
       .catch(() => setNotFound(true))
       .finally(() => setLoading(false));
@@ -395,6 +404,11 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
     if (openingDmEnabled && (!openingDmMessage.trim() || !openingDmButtonLabel.trim()))
       return setError("Your opening DM needs a message and a button label.");
 
+    if (collectEmail && !openingDmEnabled && !dmTriggerEnabled)
+      return setError(
+        "Collecting an email needs an opening DM (turn it on above) or the DM trigger."
+      );
+
     setSaving(true);
 
     const payload = {
@@ -427,6 +441,9 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       followUpEnabled,
       followUpMessage: followUpEnabled ? followUpMessage.trim() : "",
       followUpDelayMinutes: followUpEnabled ? followUpDelayMinutes : 0,
+      collectEmail,
+      emailPromptMessage: collectEmail ? emailPromptMessage.trim() : "",
+      emailInvalidMessage: collectEmail ? emailInvalidMessage.trim() : "",
       isActive: activeValue,
     };
 
@@ -858,6 +875,43 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
                   We send the link only after they tap the button and Instagram
                   confirms the follow. If it can&apos;t be verified, we send it
                   anyway.
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="mt-3 rounded-lg border border-border p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">
+                collect their email first
+              </span>
+              <Toggle
+                on={collectEmail}
+                onToggle={() => setCollectEmail(!collectEmail)}
+              />
+            </div>
+            {collectEmail && (
+              <div className="mt-3 space-y-2">
+                <textarea
+                  value={emailPromptMessage}
+                  onChange={(e) => setEmailPromptMessage(e.target.value)}
+                  placeholder="Drop your best email below and I'll send it right over ⬇️"
+                  rows={2}
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none resize-none"
+                  maxLength={1000}
+                />
+                <textarea
+                  value={emailInvalidMessage}
+                  onChange={(e) => setEmailInvalidMessage(e.target.value)}
+                  placeholder="That doesn't look like an email address. Can you send it again?"
+                  rows={2}
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none resize-none"
+                  maxLength={1000}
+                />
+                <p className="text-xs text-muted">
+                  After they tap the opening DM button, we ask for their email
+                  and send the link only once they reply with a valid address.
+                  The second box is what we answer if the reply isn&apos;t an
+                  email. Needs the opening DM or the DM trigger.
                 </p>
               </div>
             )}

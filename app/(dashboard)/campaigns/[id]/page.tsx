@@ -34,6 +34,7 @@ interface Campaign {
   followUpEnabled: boolean;
   followUpMessage: string | null;
   followUpDelayMinutes: number | null;
+  collectEmail?: boolean;
   publicReplyEnabled: boolean;
   publicReplyMessage: string | null;
   publicReplyMessages: string[];
@@ -303,6 +304,14 @@ export default function CampaignDetailPage() {
             </TabButton>
           </div>
           <div className="flex items-center gap-2">
+            {campaign.collectEmail && (
+              <a
+                href={`/api/automations/emails?id=${campaign.id}&format=csv`}
+                className="rounded border border-border px-3 py-1.5 text-sm text-muted hover:text-foreground"
+              >
+                Emails (CSV)
+              </a>
+            )}
             <Link
               href={`/campaigns/${campaign.id}/edit`}
               className="rounded border border-border px-3 py-1.5 text-sm text-muted hover:text-foreground"
