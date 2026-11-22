@@ -595,11 +595,21 @@ export async function PATCH(request: NextRequest) {
       );
     }
   }
+  // `??` would treat an explicit null (cleared) as "not sent" and read the
+  // stored value back, so compare against undefined instead.
+  const mergedWorkWithUrl =
+    automationData.workWithUrl !== undefined
+      ? automationData.workWithUrl
+      : existing.workWithUrl;
+  const mergedWorkWithTarget =
+    automationData.workWithAutomationId !== undefined
+      ? automationData.workWithAutomationId
+      : existing.workWithAutomationId;
   if (
-    (automationData.workWithUrl === null ||
-      automationData.workWithAutomationId === null) &&
-    !(automationData.workWithUrl ?? existing.workWithUrl) &&
-    !(automationData.workWithAutomationId ?? existing.workWithAutomationId)
+    (automationData.workWithUrl !== undefined ||
+      automationData.workWithAutomationId !== undefined) &&
+    !mergedWorkWithUrl &&
+    !mergedWorkWithTarget
   ) {
     automationData.workWithLabel = null;
   }
