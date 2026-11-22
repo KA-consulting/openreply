@@ -49,6 +49,8 @@ interface LoadedCampaign {
   followUpMessage: string | null;
   followUpDelayMinutes: number | null;
   collectEmail?: boolean;
+  workWithLabel?: string | null;
+  workWithUrl?: string | null;
   emailPromptMessage?: string | null;
   emailInvalidMessage?: string | null;
   publicReplyEnabled: boolean;
@@ -183,6 +185,9 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
   const [followUpEnabled, setFollowUpEnabled] = useState(false);
   const [followUpMessage, setFollowUpMessage] = useState("");
   const [followUpDelayMinutes, setFollowUpDelayMinutes] = useState(0);
+  const [workWithEnabled, setWorkWithEnabled] = useState(false);
+  const [workWithLabel, setWorkWithLabel] = useState("Travailler avec moi");
+  const [workWithUrl, setWorkWithUrl] = useState("");
   const [collectEmail, setCollectEmail] = useState(false);
   const [emailPromptMessage, setEmailPromptMessage] = useState("");
   const [emailInvalidMessage, setEmailInvalidMessage] = useState("");
@@ -294,6 +299,9 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
         setFollowUpEnabled(c.followUpEnabled ?? false);
         setFollowUpMessage(c.followUpMessage ?? "");
         setFollowUpDelayMinutes(c.followUpDelayMinutes ?? 0);
+        setWorkWithEnabled(Boolean(c.workWithUrl));
+        setWorkWithLabel(c.workWithLabel ?? "Travailler avec moi");
+        setWorkWithUrl(c.workWithUrl ?? "");
         setCollectEmail(c.collectEmail ?? false);
         setEmailPromptMessage(c.emailPromptMessage ?? "");
         setEmailInvalidMessage(c.emailInvalidMessage ?? "");
@@ -404,6 +412,9 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
     if (openingDmEnabled && (!openingDmMessage.trim() || !openingDmButtonLabel.trim()))
       return setError("Your opening DM needs a message and a button label.");
 
+    if (workWithEnabled && !/^https?:\/\/\S+$/i.test(workWithUrl.trim()))
+      return setError("The work with me button needs a full link (https://...).");
+
     if (collectEmail && !openingDmEnabled && !dmTriggerEnabled)
       return setError(
         "Collecting an email needs an opening DM (turn it on above) or the DM trigger."
@@ -441,6 +452,8 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       followUpEnabled,
       followUpMessage: followUpEnabled ? followUpMessage.trim() : "",
       followUpDelayMinutes: followUpEnabled ? followUpDelayMinutes : 0,
+      workWithLabel: workWithEnabled ? workWithLabel.trim() || "Work with me" : null,
+      workWithUrl: workWithEnabled ? workWithUrl.trim() : "",
       collectEmail,
       emailPromptMessage: collectEmail ? emailPromptMessage.trim() : "",
       emailInvalidMessage: collectEmail ? emailInvalidMessage.trim() : "",
@@ -875,6 +888,39 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
                   We send the link only after they tap the button and Instagram
                   confirms the follow. If it can&apos;t be verified, we send it
                   anyway.
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="mt-3 rounded-lg border border-border p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">
+                a &ldquo;work with me&rdquo; button
+              </span>
+              <Toggle
+                on={workWithEnabled}
+                onToggle={() => setWorkWithEnabled(!workWithEnabled)}
+              />
+            </div>
+            {workWithEnabled && (
+              <div className="mt-3 space-y-2">
+                <input
+                  value={workWithLabel}
+                  onChange={(e) => setWorkWithLabel(e.target.value)}
+                  placeholder="Travailler avec moi"
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none"
+                  maxLength={20}
+                />
+                <input
+                  value={workWithUrl}
+                  onChange={(e) => setWorkWithUrl(e.target.value)}
+                  placeholder="https://calendly.com/..."
+                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none"
+                />
+                <p className="text-xs text-muted">
+                  A link button shown next to the campaign&apos;s own buttons,
+                  on the opening DM and on the link DM. Instagram allows 20
+                  characters for the label.
                 </p>
               </div>
             )}

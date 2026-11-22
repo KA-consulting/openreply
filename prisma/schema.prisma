@@ -203,6 +203,10 @@ model Automation {
   collectEmail         Boolean @default(false)
   emailPromptMessage   String?
   emailInvalidMessage  String?
+  // Optional extra link button ("work with me") shown next to the campaign's
+  // own buttons: on the opening DM, the reveal DM and link-free DMs alike.
+  workWithLabel        String?
+  workWithUrl          String?
   publicReplyEnabled Boolean @default(false)
   publicReplyMessage String?
   publicReplyMessages String[] @default([])

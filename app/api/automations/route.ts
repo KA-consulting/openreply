@@ -43,6 +43,11 @@ const createAutomationSchema = z
     collectEmail: z.boolean().optional().default(false),
     emailPromptMessage: z.string().max(1000).optional().nullable(),
     emailInvalidMessage: z.string().max(1000).optional().nullable(),
+    workWithLabel: z.string().max(20).optional().nullable(),
+    workWithUrl: z
+      .union([z.string().url(), z.literal("")])
+      .optional()
+      .nullable(),
     publicReplyEnabled: z.boolean().optional().default(false),
     publicReplyMessage: z.string().max(1000).optional().nullable(),
     publicReplyMessages: z
@@ -116,6 +121,11 @@ const updateAutomationSchema = z.object({
   collectEmail: z.boolean().optional(),
   emailPromptMessage: z.string().max(1000).optional().nullable(),
   emailInvalidMessage: z.string().max(1000).optional().nullable(),
+  workWithLabel: z.string().max(20).optional().nullable(),
+  workWithUrl: z
+    .union([z.string().url(), z.literal("")])
+    .optional()
+    .nullable(),
   publicReplyEnabled: z.boolean().optional(),
   publicReplyMessage: z.string().max(1000).optional().nullable(),
   publicReplyMessages: z.array(z.string().max(1000)).max(10).optional(),
@@ -433,6 +443,10 @@ export async function POST(request: NextRequest) {
       followUpDelayMinutes: parsed.data.followUpEnabled
         ? parsed.data.followUpDelayMinutes
         : 0,
+      workWithUrl: parsed.data.workWithUrl || null,
+      workWithLabel: parsed.data.workWithUrl
+        ? parsed.data.workWithLabel?.trim() || null
+        : null,
       collectEmail: parsed.data.collectEmail,
       emailPromptMessage: parsed.data.collectEmail
         ? parsed.data.emailPromptMessage?.trim() || null
@@ -539,6 +553,11 @@ export async function PATCH(request: NextRequest) {
   if (automationData.followUpEnabled === false) {
     automationData.followUpMessage = null;
     automationData.followUpDelayMinutes = 0;
+  }
+  // An empty URL removes the button, label included.
+  if (automationData.workWithUrl === "") {
+    automationData.workWithUrl = null;
+    automationData.workWithLabel = null;
   }
   if (automationData.collectEmail === false) {
     automationData.emailPromptMessage = null;

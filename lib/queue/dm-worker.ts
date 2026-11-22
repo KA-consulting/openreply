@@ -97,6 +97,40 @@ function buildLinkButtons(
   }));
 }
 
+type WorkWithFields = {
+  workWithLabel?: string | null;
+  workWithUrl?: string | null;
+};
+
+/**
+ * The campaign's optional "work with me" button. Both fields must be set; the
+ * label falls back to a generic one so a URL alone still produces a button.
+ */
+function getWorkWithButton(
+  automation: WorkWithFields
+): { title: string; url: string } | null {
+  const url = automation.workWithUrl?.trim();
+  if (!url) return null;
+  return { title: automation.workWithLabel?.trim() || "Work with me", url };
+}
+
+/**
+ * Link buttons plus the work-with button, within Meta's 3-button limit. The
+ * work-with button always keeps its slot, so a campaign with three tracked
+ * links loses its third one rather than the call to action.
+ */
+function buildAllLinkButtons(
+  trackedLinks: WorkerTrackedLink[],
+  primaryLabel: string | null,
+  workWith: { title: string; url: string } | null
+): { title: string; url: string }[] {
+  const links = buildLinkButtons(trackedLinks, primaryLabel).slice(
+    0,
+    workWith ? 2 : 3
+  );
+  return workWith ? [...links, workWith] : links;
+}
+
 /**
  * Fallback text when Meta rejects the button template: render the primary link
  * inline, then append any extra tracked URLs on their own lines so no link is
@@ -115,7 +149,7 @@ function buildInlineLinkFallback(
   return extraUrls.length > 0 ? `${base}\n${extraUrls.join("\n")}` : base;
 }
 
-type RevealAutomation = {
+type RevealAutomation = WorkWithFields & {
   dmMessage: string;
   linkButtonLabel: string | null;
   trackedLinks: WorkerTrackedLink[];
@@ -134,7 +168,9 @@ async function sendRevealDirectMessage(
   commenterName: string | null,
   context: string
 ): Promise<void> {
-  if (automation.trackedLinks.length === 0) {
+  const workWith = getWorkWithButton(automation);
+
+  if (automation.trackedLinks.length === 0 && !workWith) {
     await sendDirectMessage(
       accessToken,
       automation.instagramAccount.instagramId,
@@ -154,9 +190,10 @@ async function sendRevealDirectMessage(
       message: automation.dmMessage,
       commenterName,
     }) || "Here's your link:";
-  const buttons = buildLinkButtons(
+  const buttons = buildAllLinkButtons(
     automation.trackedLinks,
-    automation.linkButtonLabel
+    automation.linkButtonLabel,
+    workWith
   );
 
   try {
@@ -177,16 +214,17 @@ async function sendRevealDirectMessage(
       formatError(buttonError)
     );
     try {
+      const inline = buildInlineLinkFallback(
+        automation.dmMessage,
+        commenterName,
+        automation.trackedLinks,
+        bodyText
+      );
       await sendDirectMessage(
         accessToken,
         automation.instagramAccount.instagramId,
         userId,
-        buildInlineLinkFallback(
-          automation.dmMessage,
-          commenterName,
-          automation.trackedLinks,
-          bodyText
-        )
+        workWith ? `${inline}\n${workWith.url}` : inline
       );
     } catch {
       throw buttonError;
@@ -622,7 +660,10 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           automation.openingDmButtonLabel as string,
           automation.requireFollow
             ? `followcheck:${automation.id}`
-            : `reveal:${automation.id}`
+            : `reveal:${automation.id}`,
+          ...(getWorkWithButton(automation)
+            ? [[getWorkWithButton(automation) as { title: string; url: string }]]
+            : [])
         );
       } else if (sendFollowPrompt) {
         const promptText = renderMessageWithoutLink({
@@ -639,16 +680,21 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           automation.followPromptButtonLabel || "i'm following",
           `followcheck:${automation.id}`
         );
-      } else if (automation.trackedLinks.length > 0) {
+      } else if (
+        automation.trackedLinks.length > 0 ||
+        getWorkWithButton(automation)
+      ) {
         // Try button template first; if Meta rejects it, fall back to inline links.
+        const workWith = getWorkWithButton(automation);
         const bodyText =
           renderMessageWithoutLink({
             message: automation.dmMessage,
             commenterName,
           }) || "Here's your link:";
-        const buttons = buildLinkButtons(
+        const buttons = buildAllLinkButtons(
           automation.trackedLinks,
-          automation.linkButtonLabel
+          automation.linkButtonLabel,
+          workWith
         );
 
         try {
@@ -669,12 +715,15 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
             "[DM Worker] Button template rejected, falling back to inline link:",
             formatError(buttonError)
           );
-          const fallbackMessage = buildInlineLinkFallback(
+          const inlineFallback = buildInlineLinkFallback(
             automation.dmMessage,
             commenterName,
             automation.trackedLinks,
             bodyText
           );
+          const fallbackMessage = workWith
+            ? `${inlineFallback}\n${workWith.url}`
+            : inlineFallback;
           try {
             await sendPrivateReply(
               accessToken,

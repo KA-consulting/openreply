@@ -1320,3 +1320,163 @@ describe("DM Worker, email gate", () => {
     expect(mockSendDirectMessageWithLinkButton).not.toHaveBeenCalled();
   });
 });
+
+describe("DM Worker, work with me button", () => {
+  const workWith = {
+    workWithLabel: "Travailler avec moi",
+    workWithUrl: "https://calendly.com/example/decouverte",
+  };
+  const expectedButton = {
+    title: "Travailler avec moi",
+    url: "https://calendly.com/example/decouverte",
+  };
+  const link = (n: number) => ({
+    slug: `slug${n}`,
+    label: `Lien ${n}`,
+    destinationUrl: `https://example.com/${n}`,
+  });
+
+  it("adds the button next to the opening DM's own button", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...mockAutomation,
+        ...workWith,
+        openingDmEnabled: true,
+        openingDmMessage: "Tu veux la vidéo ?",
+        openingDmButtonLabel: "Oui, envoie-la",
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob());
+
+    expect(mockSendPrivateReplyWithButton).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "comment_555",
+      expect.any(String),
+      "Oui, envoie-la",
+      "reveal:auto_789",
+      [expectedButton]
+    );
+  });
+
+  it("keeps the opening DM unchanged when no button is configured", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...mockAutomation,
+        openingDmEnabled: true,
+        openingDmMessage: "Tu veux la vidéo ?",
+        openingDmButtonLabel: "Oui, envoie-la",
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob());
+
+    expect(mockSendPrivateReplyWithButton).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "comment_555",
+      expect.any(String),
+      "Oui, envoie-la",
+      "reveal:auto_789"
+    );
+  });
+
+  it("turns a link-free private reply into a button message", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      { ...mockAutomation, ...workWith, dmMessage: "Dis-moi, tu es dans quel domaine ?" },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob());
+
+    expect(mockSendPrivateReplyWithLinkButton).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "comment_555",
+      "Dis-moi, tu es dans quel domaine ?",
+      [expectedButton]
+    );
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+  });
+
+  it("adds the button after the link on the reveal DM", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue({
+      ...mockAutomation,
+      ...workWith,
+      linkButtonLabel: "Voir la vidéo",
+      trackedLinks: [link(1)],
+    });
+
+    const processor = getProcessor();
+    await processor(
+      createMockPostbackJob({
+        instagramAccountId: "ig_456",
+        userId: "commenter_999",
+        payload: "reveal:auto_789",
+      })
+    );
+
+    const buttons = mockSendDirectMessageWithLinkButton.mock.calls[0][4];
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].title).toBe("Voir la vidéo");
+    expect(buttons[1]).toEqual(expectedButton);
+  });
+
+  it("drops a third link rather than the work with me button", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue({
+      ...mockAutomation,
+      ...workWith,
+      trackedLinks: [link(1), link(2), link(3)],
+    });
+
+    const processor = getProcessor();
+    await processor(
+      createMockPostbackJob({
+        instagramAccountId: "ig_456",
+        userId: "commenter_999",
+        payload: "reveal:auto_789",
+      })
+    );
+
+    const buttons = mockSendDirectMessageWithLinkButton.mock.calls[0][4];
+    expect(buttons).toHaveLength(3);
+    expect(buttons[2]).toEqual(expectedButton);
+  });
+
+  it("sends a link-free keyword DM as a button message", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...mockAutomation,
+        ...workWith,
+        dmTriggerEnabled: true,
+        requireFollow: false,
+        dmMessage: "Salut, comment tu vas ?",
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor({
+      name: "process-message",
+      data: {
+        instagramAccountId: "ig_456",
+        messageId: "mid_work",
+        messageText: "académie",
+        senderId: "commenter_999",
+      },
+      id: "message_job_work",
+      attemptsMade: 0,
+    });
+
+    expect(mockSendDirectMessageWithLinkButton).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "commenter_999",
+      "Salut, comment tu vas ?",
+      [expectedButton]
+    );
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+  });
+});

@@ -180,7 +180,9 @@ export async function sendPrivateReplyWithButton(
   commentId: string,
   text: string,
   buttonTitle: string,
-  payload: string
+  payload: string,
+  // Extra web_url buttons shown after the postback button (3 buttons in all).
+  extraLinkButtons: LinkButton[] = []
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
     `${instagramGraphBase()}/${instagramAccountId}/messages`,
@@ -201,6 +203,7 @@ export async function sendPrivateReplyWithButton(
               text: text.slice(0, 640),
               buttons: [
                 { type: "postback", title: buttonTitle.slice(0, 20), payload },
+                ...toWebUrlButtons(extraLinkButtons).slice(0, 2),
               ],
             },
           },
